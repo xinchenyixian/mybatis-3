@@ -1,5 +1,5 @@
 /**
- *    Copyright 2009-2018 the original author or authors.
+ *    Copyright 2009-2020 the original author or authors.
  *
  *    Licensed under the Apache License, Version 2.0 (the "License");
  *    you may not use this file except in compliance with the License.
@@ -52,7 +52,7 @@ public class SqlRunner {
     this.useGeneratedKeySupport = useGeneratedKeySupport;
   }
 
-  /*
+  /**
    * Executes a SELECT statement that returns one row.
    *
    * @param sql  The SQL
@@ -68,7 +68,7 @@ public class SqlRunner {
     return results.get(0);
   }
 
-  /*
+  /**
    * Executes a SELECT statement that returns multiple rows.
    *
    * @param sql  The SQL
@@ -77,21 +77,15 @@ public class SqlRunner {
    * @throws SQLException If statement preparation or execution fails
    */
   public List<Map<String, Object>> selectAll(String sql, Object... args) throws SQLException {
-    PreparedStatement ps = connection.prepareStatement(sql);
-    try {
+    try (PreparedStatement ps = connection.prepareStatement(sql)) {
       setParameters(ps, args);
-      ResultSet rs = ps.executeQuery();
-      return getResults(rs);
-    } finally {
-      try {
-        ps.close();
-      } catch (SQLException e) {
-        //ignore
+      try (ResultSet rs = ps.executeQuery()) {
+        return getResults(rs);
       }
     }
   }
 
-  /*
+  /**
    * Executes an INSERT statement.
    *
    * @param sql  The SQL
@@ -111,17 +105,19 @@ public class SqlRunner {
       setParameters(ps, args);
       ps.executeUpdate();
       if (useGeneratedKeySupport) {
-        List<Map<String, Object>> keys = getResults(ps.getGeneratedKeys());
-        if (keys.size() == 1) {
-          Map<String, Object> key = keys.get(0);
-          Iterator<Object> i = key.values().iterator();
-          if (i.hasNext()) {
-            Object genkey = i.next();
-            if (genkey != null) {
-              try {
-                return Integer.parseInt(genkey.toString());
-              } catch (NumberFormatException e) {
-                //ignore, no numeric key support
+        try (ResultSet generatedKeys = ps.getGeneratedKeys()) {
+          List<Map<String, Object>> keys = getResults(generatedKeys);
+          if (keys.size() == 1) {
+            Map<String, Object> key = keys.get(0);
+            Iterator<Object> i = key.values().iterator();
+            if (i.hasNext()) {
+              Object genkey = i.next();
+              if (genkey != null) {
+                try {
+                  return Integer.parseInt(genkey.toString());
+                } catch (NumberFormatException e) {
+                  //ignore, no numeric key support
+                }
               }
             }
           }
@@ -137,7 +133,7 @@ public class SqlRunner {
     }
   }
 
-  /*
+  /**
    * Executes an UPDATE statement.
    *
    * @param sql  The SQL
@@ -146,20 +142,13 @@ public class SqlRunner {
    * @throws SQLException If statement preparation or execution fails
    */
   public int update(String sql, Object... args) throws SQLException {
-    PreparedStatement ps = connection.prepareStatement(sql);
-    try {
+    try (PreparedStatement ps = connection.prepareStatement(sql)) {
       setParameters(ps, args);
       return ps.executeUpdate();
-    } finally {
-      try {
-        ps.close();
-      } catch (SQLException e) {
-        //ignore
-      }
     }
   }
 
-  /*
+  /**
    * Executes a DELETE statement.
    *
    * @param sql  The SQL
@@ -171,7 +160,7 @@ public class SqlRunner {
     return update(sql, args);
   }
 
-  /*
+  /**
    * Executes any string as a JDBC Statement.
    * Good for DDL
    *
@@ -179,18 +168,15 @@ public class SqlRunner {
    * @throws SQLException If statement preparation or execution fails
    */
   public void run(String sql) throws SQLException {
-    Statement stmt = connection.createStatement();
-    try {
+    try (Statement stmt = connection.createStatement()) {
       stmt.execute(sql);
-    } finally {
-      try {
-        stmt.close();
-      } catch (SQLException e) {
-        //ignore
-      }
     }
   }
 
+  /**
+   * @deprecated Since 3.5.4, this method is deprecated. Please close the {@link Connection} outside of this class.
+   */
+  @Deprecated
   public void closeConnection() {
     try {
       connection.close();
@@ -217,43 +203,33 @@ public class SqlRunner {
   }
 
   private List<Map<String, Object>> getResults(ResultSet rs) throws SQLException {
-    try {
-      List<Map<String, Object>> list = new ArrayList<>();
-      List<String> columns = new ArrayList<>();
-      List<TypeHandler<?>> typeHandlers = new ArrayList<>();
-      ResultSetMetaData rsmd = rs.getMetaData();
-      for (int i = 0, n = rsmd.getColumnCount(); i < n; i++) {
-        columns.add(rsmd.getColumnLabel(i + 1));
-        try {
-          Class<?> type = Resources.classForName(rsmd.getColumnClassName(i + 1));
-          TypeHandler<?> typeHandler = typeHandlerRegistry.getTypeHandler(type);
-          if (typeHandler == null) {
-            typeHandler = typeHandlerRegistry.getTypeHandler(Object.class);
-          }
-          typeHandlers.add(typeHandler);
-        } catch (Exception e) {
-          typeHandlers.add(typeHandlerRegistry.getTypeHandler(Object.class));
+    List<Map<String, Object>> list = new ArrayList<>();
+    List<String> columns = new ArrayList<>();
+    List<TypeHandler<?>> typeHandlers = new ArrayList<>();
+    ResultSetMetaData rsmd = rs.getMetaData();
+    for (int i = 0, n = rsmd.getColumnCount(); i < n; i++) {
+      columns.add(rsmd.getColumnLabel(i + 1));
+      try {
+        Class<?> type = Resources.classForName(rsmd.getColumnClassName(i + 1));
+        TypeHandler<?> typeHandler = typeHandlerRegistry.getTypeHandler(type);
+        if (typeHandler == null) {
+          typeHandler = typeHandlerRegistry.getTypeHandler(Object.class);
         }
-      }
-      while (rs.next()) {
-        Map<String, Object> row = new HashMap<>();
-        for (int i = 0, n = columns.size(); i < n; i++) {
-          String name = columns.get(i);
-          TypeHandler<?> handler = typeHandlers.get(i);
-          row.put(name.toUpperCase(Locale.ENGLISH), handler.getResult(rs, name));
-        }
-        list.add(row);
-      }
-      return list;
-    } finally {
-      if (rs != null) {
-        try {
-            rs.close();
-        } catch (Exception e) {
-          // ignore
-        }
+        typeHandlers.add(typeHandler);
+      } catch (Exception e) {
+        typeHandlers.add(typeHandlerRegistry.getTypeHandler(Object.class));
       }
     }
+    while (rs.next()) {
+      Map<String, Object> row = new HashMap<>();
+      for (int i = 0, n = columns.size(); i < n; i++) {
+        String name = columns.get(i);
+        TypeHandler<?> handler = typeHandlers.get(i);
+        row.put(name.toUpperCase(Locale.ENGLISH), handler.getResult(rs, name));
+      }
+      list.add(row);
+    }
+    return list;
   }
 
 }
